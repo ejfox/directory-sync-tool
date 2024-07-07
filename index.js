@@ -1,9 +1,13 @@
+#!/usr/bin/env node
+
 const blessed = require("blessed");
 const fs = require("fs");
 const path = require("path");
 const fse = require("fs-extra");
 const { exec, spawn } = require("child_process");
 const os = require("os");
+const yargs = require("yargs/yargs");
+const { hideBin } = require("yargs/helpers");
 
 const lore = `
 Welcome, netrunner. Your mission: maintain the integrity of the digital vault.
@@ -16,16 +20,22 @@ Press 'q' to quit, 'd' to delete a file, 'i' to ignore a file.
 
 let backgroundMusicProcess;
 
+require("dotenv").config();
+
 const defaultPaths = {
-  target: path.join(os.homedir(), "website", "content", "blog"),
-  source: path.join(
-    os.homedir(),
-    "Library",
-    "Mobile Documents",
-    "iCloud~md~obsidian",
-    "Documents",
-    "ejfox"
-  ),
+  target:
+    process.env.TARGET_PATH ||
+    path.join(os.homedir(), "website", "content", "blog"),
+  source:
+    process.env.SOURCE_PATH ||
+    path.join(
+      os.homedir(),
+      "Library",
+      "Mobile Documents",
+      "iCloud~md~obsidian",
+      "Documents",
+      "ejfox"
+    ),
 };
 
 const cyberSymbols = {
@@ -201,50 +211,47 @@ function createFileSelector(screen, startPath, type, callback) {
   const updateFileList = (directory) => {
     currentPathBox.setContent(`Current Path: ${directory}`);
 
-    const files = fs.readdirSync(directory).map((file) => {
-      const filePath = path.join(directory, file);
-      const isDirectory = fs.statSync(filePath).isDirectory();
-      return {
-        name: `${
-          isDirectory ? cyberSymbols.folder : cyberSymbols.file
-        } ${file}`,
-        path: filePath,
-        isDirectory,
-      };
-    });
+    try {
+      const files = fs.readdirSync(directory).map((file) => {
+        const filePath = path.join(directory, file);
+        const isDirectory = fs.statSync(filePath).isDirectory();
+        return {
+          name: `${
+            isDirectory ? cyberSymbols.folder : cyberSymbols.file
+          } ${file}`,
+          path: filePath,
+          isDirectory,
+        };
+      });
 
-    files.unshift({
-      name: `${cyberSymbols.jackIn} SELECT CURRENT DIRECTORY`,
-      path: directory,
-      isDirectory: true,
-      isCurrent: true,
-    });
-    files.unshift({
-      name: `${cyberSymbols.back} PARENT DIRECTORY`,
-      path: path.join(directory, ".."),
-      isDirectory: true,
-    });
+      files.unshift({
+        name: `${cyberSymbols.jackIn} SELECT CURRENT DIRECTORY`,
+        path: directory,
+        isDirectory: true,
+        isCurrent: true,
+      });
 
-    fileList.setItems(files.map((file) => file.name));
-    fileList.select(0);
-    updateInfoBox();
+      if (directory !== path.parse(directory).root) {
+        files.unshift({
+          name: `${cyberSymbols.back} PARENT DIRECTORY`,
+          path: path.join(directory, ".."),
+          isDirectory: true,
+        });
+      }
+
+      fileList.setItems(files.map((file) => file.name));
+      fileList.select(0);
+      updateInfoBox();
+    } catch (error) {
+      handleError(error, `Failed to read directory: ${directory}`);
+    }
   };
 
   updateFileList(startPath);
 
   fileList.on("select", (item, index) => {
-    const files = fs.readdirSync(startPath);
-    const selectedItem =
-      index === 0
-        ? { path: path.join(startPath, ".."), isDirectory: true }
-        : index === 1
-        ? { path: startPath, isDirectory: true, isCurrent: true }
-        : {
-            path: path.join(startPath, files[index - 2]),
-            isDirectory: fs
-              .statSync(path.join(startPath, files[index - 2]))
-              .isDirectory(),
-          };
+    const selectedItem = fileList.items[index];
+    const itemPath = selectedItem.path;
 
     if (selectedItem.isCurrent) {
       screen.remove(fileList);
@@ -252,9 +259,9 @@ function createFileSelector(screen, startPath, type, callback) {
       screen.remove(titleBox);
       screen.remove(currentPathBox);
       screen.remove(instructions);
-      callback(selectedItem.path);
+      callback(itemPath);
     } else if (selectedItem.isDirectory) {
-      updateFileList(selectedItem.path);
+      updateFileList(itemPath);
     }
   });
 
@@ -308,7 +315,15 @@ function getDirectories(screen, callback) {
           callback(directories);
         }
       } else {
-        selectDirectory(type);
+        // If no path is selected (user pressed Esc), go back to the previous selection
+        if (type === "target" && directories.source) {
+          selectDirectory("source");
+        } else {
+          // If we're already at source or no directories selected, exit the tool
+          stopBackgroundMusic();
+          console.clear();
+          process.exit(0);
+        }
       }
     });
   };
@@ -468,13 +483,32 @@ function startSyncTool(screen, directories) {
   screen.render();
 }
 
-function runTool() {
+function handleError(error, message) {
+  console.error(`Error: ${message}`);
+  console.error(error);
+  process.exit(1);
+}
+
+function validateDirectory(dir) {
+  try {
+    fs.accessSync(dir, fs.constants.R_OK);
+    return fs.statSync(dir).isDirectory();
+  } catch (error) {
+    return false;
+  }
+}
+
+function runTool(argv) {
   const screen = blessed.screen({
     smartCSR: true,
     title: "Directory Sync Tool",
   });
 
-  screen.key(["C-c"], () => process.exit(0));
+  screen.key(["C-c"], () => {
+    stopBackgroundMusic();
+    console.clear();
+    process.exit(0);
+  });
 
   process.on("exit", () => {
     stopBackgroundMusic();
@@ -512,15 +546,52 @@ function runTool() {
   setTimeout(() => {
     loading.stop();
     screen.remove(loading);
-    getDirectories(screen, (directories) => {
+    if (argv.source && argv.target) {
+      if (!validateDirectory(argv.source) || !validateDirectory(argv.target)) {
+        handleError(null, "Invalid source or target directory.");
+      }
       screen.destroy();
       const newScreen = blessed.screen({
         smartCSR: true,
         title: "Directory Sync Tool",
       });
-      startSyncTool(newScreen, directories);
-    });
+      startSyncTool(newScreen, { source: argv.source, target: argv.target });
+    } else {
+      getDirectories(screen, (directories) => {
+        screen.destroy();
+        const newScreen = blessed.screen({
+          smartCSR: true,
+          title: "Directory Sync Tool",
+        });
+        startSyncTool(newScreen, directories);
+      });
+    }
   }, 500);
 }
 
-runTool();
+function main() {
+  const argv = yargs(hideBin(process.argv))
+    .usage("Usage: $0 [options]")
+    .option("source", {
+      alias: "s",
+      describe: "Source directory path",
+      type: "string",
+    })
+    .option("target", {
+      alias: "t",
+      describe: "Target directory path",
+      type: "string",
+    })
+    .help("h")
+    .alias("h", "help")
+    .version("v", "Show version information", "1.0.0")
+    .alias("v", "version")
+    .example(
+      "$0 -s /path/to/source -t /path/to/target",
+      "Run the tool with specified source and target directories"
+    ).argv;
+
+  runTool(argv);
+}
+
+main();
