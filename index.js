@@ -250,18 +250,25 @@ function createFileSelector(screen, startPath, type, callback) {
   updateFileList(startPath);
 
   fileList.on("select", (item, index) => {
-    const selectedItem = fileList.items[index];
-    const itemPath = selectedItem.path;
+    const selectedItem = item.getText();
+    const selectedPath = fileList.items[index].path;
 
-    if (selectedItem.isCurrent) {
+    if (selectedItem.includes(cyberSymbols.jackIn)) {
       screen.remove(fileList);
       screen.remove(infoBox);
       screen.remove(titleBox);
       screen.remove(currentPathBox);
       screen.remove(instructions);
-      callback(itemPath);
-    } else if (selectedItem.isDirectory) {
-      updateFileList(itemPath);
+      callback(selectedPath);
+    } else if (selectedItem.includes(cyberSymbols.back)) {
+      updateFileList(path.join(selectedPath, ".."));
+    } else {
+      const selectedItem = fileList.items[index];
+      const itemPath = selectedItem.path;
+
+      if (selectedItem.isDirectory) {
+        updateFileList(itemPath);
+      }
     }
   });
 
@@ -423,49 +430,51 @@ function startSyncTool(screen, directories) {
         );
       }
     },
-    // Inside the 'actions' object, modify the 'i' key function
     i: () => {
-      const fileName = selected.match(/"([^"]+)"/)[1];
-      list.removeItem(list.selected);
-      playSound("sounds/ignore.wav");
-      screen.append(
-        blessed.box({
-          top: "center",
-          left: "center",
-          width: "50%",
-          height: 3,
-          content: `${cyberSymbols.ignore} Anomaly Ignored: "${fileName}" has been ignored.`,
-          style: { fg: "yellow", bg: "black" },
-          border: { type: "line" },
-        })
-      );
-      setTimeout(
-        () => screen.remove(screen.children[screen.children.length - 1]),
-        2000
-      );
+      const selected = list.getItem(list.selected).content;
+      if (selected !== "SYNC COMPLETE - No anomalies detected.") {
+        const fileName = selected.match(/"([^"]+)"/)[1];
+        list.removeItem(list.selected);
+        playSound("sounds/ignore.wav");
+        screen.append(
+          blessed.box({
+            top: "center",
+            left: "center",
+            width: "50%",
+            height: 3,
+            content: `${cyberSymbols.ignore} Anomaly Ignored: "${fileName}" has been ignored.`,
+            style: { fg: "yellow", bg: "black" },
+            border: { type: "line" },
+          })
+        );
+        setTimeout(
+          () => screen.remove(screen.children[screen.children.length - 1]),
+          2000
+        );
 
-      // Check if the list is empty after removing an item
-      if (list.items.length === 0) {
-        // Display success screen
-        const successScreen = blessed.box({
-          top: "center",
-          left: "center",
-          width: "75%",
-          height: "shrink",
-          content:
-            "Success! All anomalies have been handled. Shutting down in 10 seconds...",
-          style: { fg: "green", bg: "black" },
-          border: { type: "line" },
-        });
-        screen.append(successScreen);
-        screen.render();
+        // Check if the list is empty after removing an item
+        if (list.items.length === 0) {
+          // Display success screen
+          const successScreen = blessed.box({
+            top: "center",
+            left: "center",
+            width: "75%",
+            height: "shrink",
+            content:
+              "Success! All anomalies have been handled. Shutting down in 10 seconds...",
+            style: { fg: "green", bg: "black" },
+            border: { type: "line" },
+          });
+          screen.append(successScreen);
+          screen.render();
 
-        // Set a timeout for auto-shutdown
-        setTimeout(() => {
-          stopBackgroundMusic();
-          console.clear();
-          process.exit(0);
-        }, 10000); // 10 seconds
+          // Set a timeout for auto-shutdown
+          setTimeout(() => {
+            stopBackgroundMusic();
+            console.clear();
+            process.exit(0);
+          }, 10000); // 10 seconds
+        }
       }
     },
     q: () => process.exit(0),
@@ -513,6 +522,13 @@ function runTool(argv) {
   process.on("exit", () => {
     stopBackgroundMusic();
     console.clear();
+  });
+
+  process.on("uncaughtException", (err) => {
+    console.error("There was an uncaught error:", err);
+    stopBackgroundMusic();
+    console.clear();
+    process.exit(1);
   });
 
   blessed.box({
